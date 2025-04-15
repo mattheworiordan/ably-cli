@@ -200,7 +200,7 @@ function generateSessionId(): string {
 }
 
 function isValidToken(token: string): boolean {
-    log(`Placeholder token validation for: ${token.substring(0, 10)}...`);
+    log(`Placeholder token validation for: ${token.slice(0, 10)}...`);
     // Replace with actual token validation logic!
     return true; 
 }
@@ -567,7 +567,7 @@ async function startServer() {
         await ensureDockerImage();
     } catch (error) {
         logError(error);
-        // eslint-disable-next-line no-process-exit
+         
         process.exit(1);
     }
 
@@ -748,7 +748,7 @@ async function startServer() {
         // Force exit if cleanup takes too long
         setTimeout(() => {
             logError('Shutdown timed out. Forcing exit.');
-            // eslint-disable-next-line no-process-exit
+             
             process.exit(1);
         }, SHUTDOWN_GRACE_PERIOD_MS);
     };
@@ -765,7 +765,7 @@ async function startServer() {
     } catch (error) {
         logError('Server failed unexpectedly:');
         logError(error);
-        // eslint-disable-next-line no-process-exit
+         
         process.exit(1);
     }
 })();
@@ -931,7 +931,7 @@ function handleMessage(session: ClientSession, message: Buffer) {
         } else {
             logError(`Received unknown message type or format for session ${session.sessionId}: ${msgStr}`);
         }
-    } catch (error) {
+    } catch {
         // Handle non-JSON messages or binary data directly as input
         // log(`Received non-JSON message for session ${session.sessionId}, writing directly to stdinStream.`);
         if (session.stdinStream && !session.stdinStream.destroyed) {
