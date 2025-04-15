@@ -1,9 +1,10 @@
-import WebSocket, { WebSocketServer, createWebSocketStream } from 'ws';
 import type { WebSocket as WebSocketType } from 'ws';
+
 import Docker from 'dockerode';
-import { Duplex, Stream } from 'stream';
-import * as path from 'path'; // Needed for path resolution
-import { fileURLToPath } from 'url'; // Needed for __dirname in ESM
+import * as path from 'node:path';
+import { Duplex, Stream } from 'node:stream';
+import WebSocket, { WebSocketServer, createWebSocketStream } from 'ws'; // Needed for path resolution
+import { fileURLToPath } from 'node:url'; // Needed for __dirname in ESM
 
 // Replicate __dirname behavior in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -14,18 +15,18 @@ const DOCKER_IMAGE_NAME = 'ably-cli-sandbox';
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const DEFAULT_PORT = 8080;
 const DEFAULT_MAX_SESSIONS = 5;
-const AUTH_TIMEOUT_MS = 10000; // 10 seconds
-const SHUTDOWN_GRACE_PERIOD_MS = 10000; // 10 seconds
+const AUTH_TIMEOUT_MS = 10_000; // 10 seconds
+const SHUTDOWN_GRACE_PERIOD_MS = 10_000; // 10 seconds
 
 interface Session {
-  container: Docker.Container;
-  ws: WebSocketType;
-  timeoutId: NodeJS.Timeout;
-  execStream: Duplex;
-  execInstance: Docker.Exec;
-  apiKey?: string;
   accessToken?: string;
+  apiKey?: string;
+  container: Docker.Container;
+  execInstance: Docker.Exec;
+  execStream: Duplex;
   isAuthenticated: boolean;
+  timeoutId: NodeJS.Timeout;
+  ws: WebSocketType;
 }
 
 const sessions: Map<string, Session> = new Map();
@@ -114,6 +115,7 @@ async function ensureDockerImage(): Promise<void> {
         if (error instanceof Error && error.message.includes('Cannot connect to the Docker daemon')) {
             throw new Error('Failed to connect to Docker. Is the Docker daemon running and accessible?');
         }
+
         throw error;
     }
 }
@@ -152,24 +154,24 @@ async function createContainer(
         }
         
         const container = await docker.createContainer({
-            Image: DOCKER_IMAGE_NAME,
+            AttachStderr: true,
             AttachStdin: true,
             AttachStdout: true,
-            AttachStderr: true,
-            Tty: true,          // Enable TTY mode
+            Env: env,
+            HostConfig: {
+                AutoRemove: true,
+                CapDrop: ['ALL'],
+                SecurityOpt: ['no-new-privileges'],
+            },
+            Image: DOCKER_IMAGE_NAME,
+            Labels: { // Add label for cleanup
+                'managed-by': 'ably-cli-terminal-server'
+            },
             OpenStdin: true,
             StdinOnce: false,
             StopSignal: 'SIGTERM',
             StopTimeout: 5,
-            Labels: { // Add label for cleanup
-                'managed-by': 'ably-cli-terminal-server'
-            },
-            HostConfig: {
-                CapDrop: ['ALL'],
-                SecurityOpt: ['no-new-privileges'],
-                AutoRemove: true,
-            },
-            Env: env,
+            Tty: true,          // Enable TTY mode
             // Don't override the container's default CMD
             // This will ensure the restricted-shell.sh is used as defined in the Dockerfile
         });
@@ -199,7 +201,7 @@ async function terminateSession(sessionId: string, reason: string): Promise<void
     // Send termination message before closing
     try {
         if (session.ws.readyState === WebSocket.OPEN) {
-            session.ws.send(JSON.stringify({ type: 'session_end', reason }));
+            session.ws.send(JSON.stringify({ reason, type: 'session_end' }));
         }
     } catch (sendError) {
         logError(`Error sending session_end message to ${sessionId}: ${sendError}`);
@@ -221,7 +223,7 @@ async function terminateSession(sessionId: string, reason: string): Promise<void
 
     // Stop the main Container (AutoRemove should handle deletion)
     try {
-        const container = session.container;
+        const {container} = session;
         log(`Stopping container ${sessionId}...`);
         // Inspect might fail if already stopped/removed
         const containerInfo = await container.inspect().catch(() => null); 
@@ -239,12 +241,13 @@ async function terminateSession(sessionId: string, reason: string): Promise<void
             logError(`Error during container stop/cleanup for session ${sessionId}: ${dockerError}`);
         }
     }
+
     log(`Session ${sessionId} resources released.`);
 }
 
 async function cleanupAllSessions(): Promise<void> {
     log('Cleaning up all active sessions...');
-    const cleanupPromises = Array.from(sessions.keys()).map(sessionId =>
+    const cleanupPromises = [...sessions.keys()].map(sessionId =>
         terminateSession(sessionId, 'Server shutting down.')
     );
     await Promise.allSettled(cleanupPromises);
@@ -264,10 +267,10 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
         authTimeoutIdRef.current = null;
     }
 
-    let credentials: { type?: string; apiKey?: string; accessToken?: string; environmentVariables?: Record<string, string> } = {};
+    let credentials: { accessToken?: string; apiKey?: string; environmentVariables?: Record<string, string>; type?: string } = {};
     try {
         credentials = JSON.parse(message.toString());
-    } catch (e) {
+    } catch {
         logError('Failed to parse auth message');
         ws.send('Invalid authentication message format.\r\n');
         ws.close(1008, 'Invalid auth message');
@@ -283,7 +286,7 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
 
     log('Client authenticated. Creating container and exec process...');
     let container: Docker.Container | null = null;
-    let sessionId: string | null = null;
+    let sessionId: null | string = null;
     let execStream: Duplex | null = null;
     let sessionTerminated = false;
     const cleanupAndTerminate = async (reason: string) => {
@@ -293,6 +296,7 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
         if (sessionId) {
             await terminateSession(sessionId, reason); 
         }
+
         // Ensure WS is closed if session termination didn't catch it
         if(ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
             ws.close(1011, reason);
@@ -309,12 +313,11 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
         // 2. Execute the restricted shell script directly via exec
         log(`Executing restricted shell in container ${sessionId}...`);
         const exec = await container.exec({
-            // Explicitly run the restricted shell script
-            Cmd: ['/bin/bash', '/scripts/restricted-shell.sh'], 
+            AttachStderr: true, 
             AttachStdin: true,
             AttachStdout: true,
-            AttachStderr: true,
-            Tty: true,          // Use TTY for the exec process
+            // Explicitly run the restricted shell script
+            Cmd: ['/bin/bash', '/scripts/restricted-shell.sh'],
             // Set critical environment variables FOR the restricted shell process
             Env: [
                 'TERM=xterm-256color',
@@ -323,7 +326,8 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
                 'LC_CTYPE=en_US.UTF-8',
                 'CLICOLOR=1',
                 'PS1=$ ' // Ensure prompt is set for this exec context
-            ]
+            ],
+            Tty: true          // Use TTY for the exec process
         });
         const execAttachOptions = { hijack: true, stdin: true }; // Keep hijack: true
         execStream = await exec.start(execAttachOptions) as Duplex; 
@@ -347,14 +351,14 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
         // 4. Store Session
         const timeoutId = setTimeout(() => cleanupAndTerminate('Session timed out.'), SESSION_TIMEOUT_MS);
         const fullSession: Session = {
-            container,
-            ws,
-            timeoutId,
-            execStream, // This is the stream from the exec'd restricted shell
-            execInstance: exec, // Store the exec instance here
-            apiKey: credentials.apiKey,
             accessToken: credentials.accessToken,
+            apiKey: credentials.apiKey,
+            container,
+            execInstance: exec, // Store the exec instance here
+            execStream, // This is the stream from the exec'd restricted shell
             isAuthenticated: true,
+            timeoutId,
+            ws,
         };
         sessions.set(sessionId, fullSession);
         log(`Session ${sessionId} created and stored.`);
@@ -390,9 +394,9 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
                                 // --- END DEBUGGING ---
                                 websocketStream.write(payload);
                             }
-                        } catch (err) {
+                        } catch (error) {
                             const logSessionId = sessionId || 'unknown';
-                            logError(`[${logSessionId}] WS stream write error after demux: ${err instanceof Error ? err.message : String(err)}`);
+                            logError(`[${logSessionId}] WS stream write error after demux: ${error instanceof Error ? error.message : String(error)}`);
                             cleanupAndTerminate('WS stream write error');
                             return; // Stop processing if write fails
                         }
@@ -439,7 +443,7 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
                         {
                             isResizeMessage = true;
                         }
-                    } catch (e) {
+                    } catch {
                         // Not a JSON message, treat as regular data
                     }
                 }
@@ -474,9 +478,9 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
                         log(`[${currentSessionId}] Could not forward non-resize data, stream unavailable.`);
                     }
                 }
-            } catch (err) {
+            } catch (error) {
                  // Use the captured sessionId for consistent logging
-                 logError(`[${currentSessionId}] Error processing incoming websocket data: ${err}`);
+                 logError(`[${currentSessionId}] Error processing incoming websocket data: ${error}`);
                  // Terminate the session on general processing errors within this handler
                  cleanupAndTerminate('WebSocket data processing error');
             }
@@ -534,12 +538,12 @@ async function startServer() {
     }
 
     const wss = new WebSocketServer({ 
-        port: port,
         // Add CORS support for the HTTP upgrade request
-        handleProtocols: (protocols, request) => {
+        handleProtocols(protocols, request) {
             return Array.isArray(protocols) && protocols.length > 0 ? protocols[0] : '';
         },
-        verifyClient: (info, callback) => {
+        port,
+        verifyClient(info, callback) {
             // Get the origin from the request
             const origin = info.req.headers.origin || '*';
             log(`Client connecting from origin: ${origin} - allowing connection`);
@@ -560,10 +564,7 @@ async function startServer() {
     // Handle HTTP OPTIONS requests (preflight) separately
     wss.on('headers', (headers, request) => {
         // Add CORS headers to all responses
-        headers.push('Access-Control-Allow-Origin: *');
-        headers.push('Access-Control-Allow-Headers: Authorization, X-Requested-With, Content-Type');
-        headers.push('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-        headers.push('Access-Control-Allow-Credentials: true');
+        headers.push('Access-Control-Allow-Origin: *', 'Access-Control-Allow-Headers: Authorization, X-Requested-With, Content-Type', 'Access-Control-Allow-Methods: GET, POST, OPTIONS', 'Access-Control-Allow-Credentials: true');
     });
 
     wss.on('connection', async (ws: WebSocketType, request) => {
@@ -589,8 +590,8 @@ async function startServer() {
 
         const authHandler = (message: Buffer) => {
             // Pass the ref object so handleAuth can clear the timer
-            handleAuth(message, ws, authTimeoutIdRef).catch(err => {
-                logError(`Unhandled error during handleAuth: ${err}`);
+            handleAuth(message, ws, authTimeoutIdRef).catch(error => {
+                logError(`Unhandled error during handleAuth: ${error}`);
                 // Clear timer if handleAuth crashes before doing so
                 if (authTimeoutIdRef.current) clearTimeout(authTimeoutIdRef.current);
                 if(ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
@@ -605,19 +606,21 @@ async function startServer() {
         ws.on('close', (code, reason) => {
             log(`WebSocket Closed (Outer Handler). Code: ${code}, Reason: ${reason.toString('utf-8')}`);
             // Find session associated with this WebSocket
-            let sessionIdToTerminate: string | null = null;
+            let sessionIdToTerminate: null | string = null;
             for (const [id, session] of sessions.entries()) {
                 if (session.ws === ws) {
                     sessionIdToTerminate = id;
                     break;
                 }
             }
+
             if (sessionIdToTerminate) {
                 // Terminate the found session
                 terminateSession(sessionIdToTerminate, 'WebSocket connection closed.');
             } else {
                 log('Outer WS close handler: No active session found for this WS.');
             }
+
             // Clear auth timeout if it's still pending
             if (authTimeoutIdRef.current) {
                 clearTimeout(authTimeoutIdRef.current);
@@ -627,21 +630,23 @@ async function startServer() {
         ws.on('error', (err) => {
             logError(`WebSocket Error (Outer Handler): ${err.message}`);
             // Find session associated with this WebSocket
-            let sessionIdToTerminate: string | null = null;
+            let sessionIdToTerminate: null | string = null;
             for (const [id, session] of sessions.entries()) {
                 if (session.ws === ws) {
                     sessionIdToTerminate = id;
                     break;
                 }
             }
+
             if (sessionIdToTerminate) {
                 // Terminate the found session
                 terminateSession(sessionIdToTerminate, 'WebSocket connection error.');
             } else {
                  logError('Outer WS error handler: No active session found for this WS.');
                  // Attempt to close if possible
-                 try { ws.close(1011, 'WS Error'); } catch(e) {/* ignore */}
+                 try { ws.close(1011, 'WS Error'); } catch{/* ignore */}
             }
+
             // Clear auth timeout if it's still pending
             if (authTimeoutIdRef.current) {
                 clearTimeout(authTimeoutIdRef.current);
@@ -666,6 +671,7 @@ async function startServer() {
             if (err) {
                 logError(`Error closing WebSocket server: ${err}`);
             }
+
             log('WebSocket server closed.');
             log('Shutdown complete.');
             process.exit(0);
@@ -676,6 +682,7 @@ async function startServer() {
             process.exit(1);
         }, SHUTDOWN_GRACE_PERIOD_MS);
     };
+
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
@@ -685,9 +692,9 @@ async function startServer() {
     log("Starting Terminal Server...");
     try {
         await startServer(); // Run the actual server now
-    } catch (err) {
+    } catch (error) {
         logError('Server failed unexpectedly:');
-        logError(err);
+        logError(error);
         process.exit(1);
     }
 })();
