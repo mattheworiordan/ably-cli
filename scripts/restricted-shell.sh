@@ -75,7 +75,7 @@ trap 'handle_interrupt' SIGINT SIGTSTP SIGQUIT
 printf '\033[2J\033[H'
 
 # Print welcome message using ably CLI's built-in help
-ably --web-cli-help
+ably help web-cli
 
 # Enable bash completion if available
 if [ -f /etc/bash_completion ]; then

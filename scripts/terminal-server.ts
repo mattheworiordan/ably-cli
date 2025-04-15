@@ -567,8 +567,8 @@ async function startServer() {
         await ensureDockerImage();
     } catch (error) {
         logError(error);
-         
-        process.exit(1);
+        // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit
+        process.exit(1); // Keep necessary exit with disable comment
     }
 
     const wss = new WebSocketServer({ 
@@ -748,8 +748,8 @@ async function startServer() {
         // Force exit if cleanup takes too long
         setTimeout(() => {
             logError('Shutdown timed out. Forcing exit.');
-             
-            process.exit(1);
+            // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit
+            process.exit(1); // Keep necessary exit with disable comment
         }, SHUTDOWN_GRACE_PERIOD_MS);
     };
 
@@ -757,18 +757,17 @@ async function startServer() {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-// --- Main Execution Block --- 
-(async () => {
-    log("Starting Terminal Server...");
-    try {
-        await startServer(); // Run the actual server now
-    } catch (error) {
-        logError('Server failed unexpectedly:');
-        logError(error);
-         
-        process.exit(1);
-    }
-})();
+// Removed IIFE - using top-level await directly
+
+try {
+    await startServer();
+    log('Terminal server started successfully.');
+} catch (error) {
+    logError('Server failed unexpectedly:');
+    logError(error);
+    // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit
+    process.exit(1); // Keep necessary exit with disable comment
+}
 
 function pipeStreams(wsStream: Duplex, containerStream: stream.Duplex) {
     log('Piping WebSocket stream to container stream');
