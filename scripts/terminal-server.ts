@@ -1,10 +1,12 @@
-import type { WebSocket as WebSocketType } from 'ws';
-
-import Docker from 'dockerode';
-import * as path from 'node:path';
-import { Duplex, Stream } from 'node:stream';
-import WebSocket, { WebSocketServer, createWebSocketStream } from 'ws'; // Needed for path resolution
-import { fileURLToPath } from 'node:url'; // Needed for __dirname in ESM
+import { WebSocketServer, WebSocket as WebSocketType } from 'ws';
+import { createWebSocketStream } from 'ws';
+import http from 'node:http';
+import { Stream } from 'node:stream';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import { ConfigManager } from '../src/services/config-manager.js';
 
 // Replicate __dirname behavior in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -18,18 +20,18 @@ const DEFAULT_MAX_SESSIONS = 5;
 const AUTH_TIMEOUT_MS = 10_000; // 10 seconds
 const SHUTDOWN_GRACE_PERIOD_MS = 10_000; // 10 seconds
 
-interface Session {
-  accessToken?: string;
-  apiKey?: string;
-  container: Docker.Container;
-  execInstance: Docker.Exec;
-  execStream: Duplex;
-  isAuthenticated: boolean;
-  timeoutId: NodeJS.Timeout;
-  ws: WebSocketType;
+// Type definition for auth timeout reference
+interface AuthTimeoutRef {
+  current: NodeJS.Timeout | null;
 }
 
-const sessions: Map<string, Session> = new Map();
+type ClientSession = {
+  ws: WebSocketType;
+  authenticated: boolean;
+  timeoutId: NodeJS.Timeout;
+};
+
+const sessions = new Map<string, ClientSession>();
 const docker = new Docker();
 
 function log(message: string): void {
@@ -255,7 +257,7 @@ async function cleanupAllSessions(): Promise<void> {
 }
 
 // --- Main Connection Handler using Exec --- 
-async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: { current: NodeJS.Timeout | null }) {
+async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: AuthTimeoutRef) {
     if (ws.readyState !== WebSocket.OPEN) {
         logError('WebSocket is not open during handleAuth.');
         return;
@@ -350,15 +352,10 @@ async function handleAuth(message: Buffer, ws: WebSocketType, authTimeoutIdRef: 
 
         // 4. Store Session
         const timeoutId = setTimeout(() => cleanupAndTerminate('Session timed out.'), SESSION_TIMEOUT_MS);
-        const fullSession: Session = {
-            accessToken: credentials.accessToken,
-            apiKey: credentials.apiKey,
-            container,
-            execInstance: exec, // Store the exec instance here
-            execStream, // This is the stream from the exec'd restricted shell
-            isAuthenticated: true,
-            timeoutId,
+        const fullSession: ClientSession = {
             ws,
+            authenticated: true,
+            timeoutId,
         };
         sessions.set(sessionId, fullSession);
         log(`Session ${sessionId} created and stored.`);
@@ -534,6 +531,7 @@ async function startServer() {
         await ensureDockerImage();
     } catch (error) {
         logError(error);
+        // eslint-disable-next-line no-process-exit
         process.exit(1);
     }
 
@@ -674,11 +672,11 @@ async function startServer() {
 
             log('WebSocket server closed.');
             log('Shutdown complete.');
-            process.exit(0);
         });
         // Force exit if cleanup takes too long
         setTimeout(() => {
             logError('Shutdown timed out. Forcing exit.');
+            // eslint-disable-next-line no-process-exit
             process.exit(1);
         }, SHUTDOWN_GRACE_PERIOD_MS);
     };
@@ -695,6 +693,7 @@ async function startServer() {
     } catch (error) {
         logError('Server failed unexpectedly:');
         logError(error);
+        // eslint-disable-next-line no-process-exit
         process.exit(1);
     }
 })();
