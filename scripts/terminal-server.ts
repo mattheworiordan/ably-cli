@@ -279,33 +279,27 @@ async function cleanupAllSessions(): Promise<void> {
 }
 
 // --- Main Connection Handler using Exec --- 
-async function handleAuth(message: Buffer, ws: WebSocket, authTimeoutIdRef: AuthTimeoutRef) {
+async function handleAuth(ws: WebSocket, req: any): Promise<boolean> {
     if (ws.readyState !== WebSocket.OPEN) {
         logError('WebSocket is not open during handleAuth.');
-        return;
-    }
-
-    // Clear the specific auth timeout for this connection
-    if (authTimeoutIdRef.current) {
-        clearTimeout(authTimeoutIdRef.current);
-        authTimeoutIdRef.current = null;
+        return false;
     }
 
     let credentials: { accessToken?: string; apiKey?: string; environmentVariables?: Record<string, string>; type?: string } = {};
     try {
-        credentials = JSON.parse(message.toString());
+        credentials = JSON.parse(req.headers.authorization || '');
     } catch {
         logError('Failed to parse auth message');
         ws.send('Invalid authentication message format.\r\n');
         ws.close(1008, 'Invalid auth message');
-        return;
+        return false;
     }
 
     if (credentials.type !== 'auth' || !credentials.apiKey || !credentials.accessToken) {
         logError('Invalid auth message content');
         ws.send('Invalid authentication credentials provided.\r\n');
         ws.close(1008, 'Invalid credentials');
-        return;
+        return false;
     }
 
     log('Client authenticated. Creating container and exec process...');
@@ -544,6 +538,7 @@ async function handleAuth(message: Buffer, ws: WebSocket, authTimeoutIdRef: Auth
 
         log(`Session ${sessionId} authenticated and attached.`);
 
+        return true;
     } catch (error) {
         logError(`Error during authentication for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
@@ -551,6 +546,7 @@ async function handleAuth(message: Buffer, ws: WebSocket, authTimeoutIdRef: Auth
         }
         // Add null check for sessionId before cleanup
         if (sessionId) cleanupSession(sessionId);
+        return false;
     }
 }
 
