@@ -10,6 +10,7 @@ import { ConfigManager } from '../src/services/config-manager.js';
 import Docker from 'dockerode';
 import stream, { Duplex } from 'node:stream';
 import crypto from 'node:crypto';
+import { Server } from 'ws';
 
 // Replicate __dirname behavior in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -22,11 +23,10 @@ const DEFAULT_PORT = 8080;
 const DEFAULT_MAX_SESSIONS = 5;
 const AUTH_TIMEOUT_MS = 10_000; // 10 seconds
 const SHUTDOWN_GRACE_PERIOD_MS = 10_000; // 10 seconds
+const WS_PING_INTERVAL = 30000;
 
 // Type definition for auth timeout reference
-interface AuthTimeoutRef {
-  current: NodeJS.Timeout | null;
-}
+let _AuthTimeoutRef: NodeJS.Timeout | null = null;
 
 type ClientSession = {
   ws: WebSocket;
@@ -279,7 +279,7 @@ async function cleanupAllSessions(): Promise<void> {
 }
 
 // --- Main Connection Handler using Exec --- 
-async function handleAuth(ws: WebSocket, req: any): Promise<boolean> {
+async function _handleAuth(ws: WebSocket, req: any): Promise<boolean> {
     if (ws.readyState !== WebSocket.OPEN) {
         logError('WebSocket is not open during handleAuth.');
         return false;
