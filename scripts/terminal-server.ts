@@ -563,7 +563,7 @@ async function startServer() {
         await ensureDockerImage();
     } catch (error) {
         logError(error);
-        // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit
+         
         process.exit(1); // Keep necessary exit with disable comment
     }
 
@@ -744,7 +744,7 @@ async function startServer() {
         // Force exit if cleanup takes too long
         setTimeout(() => {
             logError('Shutdown timed out. Forcing exit.');
-            // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit
+             
             process.exit(1); // Keep necessary exit with disable comment
         }, SHUTDOWN_GRACE_PERIOD_MS);
     };
@@ -761,7 +761,7 @@ try {
 } catch (error) {
     logError('Server failed unexpectedly:');
     logError(error);
-    // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit
+     
     process.exit(1); // Keep necessary exit with disable comment
 }
 
