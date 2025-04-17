@@ -18,9 +18,6 @@ const DEFAULT_MAX_SESSIONS = 5;
 const AUTH_TIMEOUT_MS = 10_000; // 10 seconds
 const SHUTDOWN_GRACE_PERIOD_MS = 10_000; // 10 seconds
 
-// Type definition for auth timeout reference
-let _AuthTimeoutRef: NodeJS.Timeout | null = null;
-
 type ClientSession = {
   ws: WebSocket;
   authenticated: boolean;
@@ -562,7 +559,7 @@ async function startServer() {
 
     const wss = new WebSocketServer({ 
         // Add CORS support for the HTTP upgrade request
-        handleProtocols(protocols, request) {
+        handleProtocols(protocols, _request) {
             return Array.isArray(protocols) && protocols.length > 0 ? protocols[0] : '';
         },
         port,
@@ -585,12 +582,12 @@ async function startServer() {
     });
 
     // Handle HTTP OPTIONS requests (preflight) separately
-    wss.on('headers', (headers, request) => {
+    wss.on('headers', (headers, _request) => {
         // Add CORS headers to all responses
         headers.push('Access-Control-Allow-Origin: *', 'Access-Control-Allow-Headers: Authorization, X-Requested-With, Content-Type', 'Access-Control-Allow-Methods: GET, POST, OPTIONS', 'Access-Control-Allow-Credentials: true');
     });
 
-    wss.on('connection', async (ws: WebSocket, request) => {
+    wss.on('connection', async (ws: WebSocket, _request) => {
         if (sessions.size >= maxSessions) {
             log('Max session limit reached. Rejecting new connection.');
             ws.send('Server busy. Please try again later.\r\n');
@@ -600,9 +597,6 @@ async function startServer() {
 
         const sessionId = generateSessionId();
         log(`Client connected. Assigning session ID: ${sessionId}. Waiting for authentication...`);
-
-        // Use a ref object for the auth timeout ID
-        const authTimeoutIdRef = { current: null as NodeJS.Timeout | null };
 
         // Create a minimal initial session state for tracking
         const initialSession: Partial<ClientSession> = {
@@ -618,7 +612,6 @@ async function startServer() {
              sessionId: sessionId,
              authenticated: false,
         };
-        authTimeoutIdRef.current = initialSession.timeoutId!; // Store the timeout ID
 
         // Store partial session - crucial for cleanup if auth fails
         sessions.set(sessionId, initialSession as ClientSession);
@@ -654,7 +647,6 @@ async function startServer() {
 
                 // --- Auth Success -> Container Creation Phase ---
                 log(`[${sessionId}] Authentication successful.`);
-                clearTimeout(authTimeoutIdRef.current!); // Clear the auth timeout
 
                 let container: Docker.Container;
                 try {
