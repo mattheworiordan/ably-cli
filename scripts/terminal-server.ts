@@ -269,7 +269,7 @@ async function cleanupAllSessions(): Promise<void> {
 }
 
 // --- Main Connection Handler using Exec --- 
-async function _handleAuth(ws: WebSocket, req: any): Promise<boolean> {
+async function _handleAuth(ws: WebSocket, req: unknown): Promise<boolean> {
     if (ws.readyState !== WebSocket.OPEN) {
         logError('WebSocket is not open during handleAuth.');
         return false;
@@ -277,7 +277,9 @@ async function _handleAuth(ws: WebSocket, req: any): Promise<boolean> {
 
     let credentials: { accessToken?: string; apiKey?: string; environmentVariables?: Record<string, string>; type?: string } = {};
     try {
-        credentials = JSON.parse(req.headers.authorization || '');
+        // Treat req as unknown; extract headers if available
+        const headers = (req as any).headers || {};
+        credentials = JSON.parse(headers.authorization || '');
     } catch {
         logError('Failed to parse auth message');
         ws.send('Invalid authentication message format.\r\n');
@@ -559,8 +561,9 @@ async function startServer() {
 
     const wss = new WebSocketServer({ 
         // Add CORS support for the HTTP upgrade request
-        handleProtocols(protocols, _request) {
-            return Array.isArray(protocols) && protocols.length > 0 ? protocols[0] : '';
+        handleProtocols(protocols: Set<string>, _request: unknown): string | false {
+            const firstProtocol = protocols.values().next().value;
+            return firstProtocol === undefined ? false : firstProtocol;
         },
         port,
         verifyClient(info, callback) {
@@ -582,12 +585,12 @@ async function startServer() {
     });
 
     // Handle HTTP OPTIONS requests (preflight) separately
-    wss.on('headers', (headers, _request) => {
+    wss.on('headers', (headers: string[], _request: unknown) => {
         // Add CORS headers to all responses
         headers.push('Access-Control-Allow-Origin: *', 'Access-Control-Allow-Headers: Authorization, X-Requested-With, Content-Type', 'Access-Control-Allow-Methods: GET, POST, OPTIONS', 'Access-Control-Allow-Credentials: true');
     });
 
-    wss.on('connection', async (ws: WebSocket, _request) => {
+    wss.on('connection', async (ws: WebSocket, _request: unknown) => {
         if (sessions.size >= maxSessions) {
             log('Max session limit reached. Rejecting new connection.');
             ws.send('Server busy. Please try again later.\r\n');
