@@ -15,7 +15,7 @@ const __dirname = path.dirname(__filename);
 const DOCKER_IMAGE_NAME = 'ably-cli-sandbox';
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const DEFAULT_PORT = 8080;
-const DEFAULT_MAX_SESSIONS = 5;
+const DEFAULT_MAX_SESSIONS = 50;
 const AUTH_TIMEOUT_MS = 10_000; // 10 seconds
 const SHUTDOWN_GRACE_PERIOD_MS = 10_000; // 10 seconds
 
@@ -563,9 +563,8 @@ async function startServer() {
     await cleanupStaleContainers();
     await ensureDockerImage(); // Ensure image exists before starting
 
-    const port = Number.parseInt(process.env.PORT || '3000', 10);
-    const maxSessions = Number.parseInt(process.env.MAX_SESSIONS || '100', 10);
-    const inactivityTimeoutMs = Number.parseInt(process.env.INACTIVITY_TIMEOUT_MS || '300000', 10); // 5 minutes default
+    const port = Number.parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
+    const maxSessions = Number.parseInt(process.env.MAX_SESSIONS || String(DEFAULT_MAX_SESSIONS), 10);
 
     const server = http.createServer((_req, res) => {
         // Simple health check endpoint
@@ -584,7 +583,7 @@ async function startServer() {
         verifyClient // Use function from outer scope
     });
 
-    wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+    wss.on('connection', (ws: WebSocket, _req: http.IncomingMessage) => {
         const sessionId = generateSessionId();
         log(`Client connected, assigned session ID: ${sessionId}`);
 
