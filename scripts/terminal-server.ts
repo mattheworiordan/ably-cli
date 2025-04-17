@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Docker from 'dockerode';
 import stream, { Duplex } from 'node:stream';
 import crypto from 'node:crypto';
+import http from 'node:http';
 
 // Replicate __dirname behavior in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -269,7 +270,7 @@ async function cleanupAllSessions(): Promise<void> {
 }
 
 // --- Main Connection Handler using Exec --- 
-async function _handleAuth(ws: WebSocket, req: unknown): Promise<boolean> {
+async function _handleAuth(ws: WebSocket, req: http.IncomingMessage): Promise<boolean> {
     if (ws.readyState !== WebSocket.OPEN) {
         logError('WebSocket is not open during handleAuth.');
         return false;
@@ -542,64 +543,57 @@ async function _handleAuth(ws: WebSocket, req: unknown): Promise<boolean> {
     }
 }
 
+// Moved from startServer scope
+const handleProtocols = (protocols: Set<string>, _request: unknown): string | false => {
+    const firstProtocol = protocols.values().next().value;
+    return firstProtocol === undefined ? false : firstProtocol;
+};
+
+// Moved from startServer scope
+const verifyClient = (info: { origin: string; req: http.IncomingMessage; secure: boolean }, callback: (res: boolean, code?: number, message?: string, headers?: http.OutgoingHttpHeaders) => void) => {
+    const origin = info.req.headers.origin || '*';
+    log(`Client connecting from origin: ${origin}`);
+    // Allow all connections for now, but could add origin checks here
+    callback(true);
+};
+
 // --- WebSocket Server Setup (Restored & Modified) --- 
 async function startServer() {
-    const port = DEFAULT_PORT; // Simplified for now
-    const maxSessions = DEFAULT_MAX_SESSIONS;
-    log(`Starting Terminal Server on port ${port}, max sessions: ${maxSessions}...`);
-
-    // Clean up stale containers before starting
+    log('Starting WebSocket server...');
     await cleanupStaleContainers();
+    await ensureDockerImage(); // Ensure image exists before starting
 
-    try {
-        await ensureDockerImage();
-    } catch (error) {
-        logError(error);
-         
-        process.exit(1); // Keep necessary exit with disable comment
-    }
+    const port = Number.parseInt(process.env.PORT || '3000', 10);
+    const maxSessions = Number.parseInt(process.env.MAX_SESSIONS || '100', 10);
+    const inactivityTimeoutMs = Number.parseInt(process.env.INACTIVITY_TIMEOUT_MS || '300000', 10); // 5 minutes default
 
-    const wss = new WebSocketServer({ 
-        // Add CORS support for the HTTP upgrade request
-        handleProtocols(protocols: Set<string>, _request: unknown): string | false {
-            const firstProtocol = protocols.values().next().value;
-            return firstProtocol === undefined ? false : firstProtocol;
-        },
-        port,
-        verifyClient(info, callback) {
-            // Get the origin from the request
-            const origin = info.req.headers.origin || '*';
-            log(`Client connecting from origin: ${origin} - allowing connection`);
-            
-            // Set CORS headers on the upgrade response
-            if (info.req.headers.origin) {
-                info.req.headers['Access-Control-Allow-Origin'] = '*';
-                info.req.headers['Access-Control-Allow-Headers'] = 'Authorization, X-Requested-With, Content-Type';
-                info.req.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
-                info.req.headers['Access-Control-Allow-Credentials'] = 'true';
-            }
-            
-            // Always allow the connection
-            callback(true);
+    const server = http.createServer((_req, res) => {
+        // Simple health check endpoint
+        if (_req.url === '/health') {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end('OK');
+        } else {
+            res.writeHead(404);
+            res.end();
         }
     });
 
-    // Handle HTTP OPTIONS requests (preflight) separately
-    wss.on('headers', (headers: string[], _request: unknown) => {
-        // Add CORS headers to all responses
-        headers.push('Access-Control-Allow-Origin: *', 'Access-Control-Allow-Headers: Authorization, X-Requested-With, Content-Type', 'Access-Control-Allow-Methods: GET, POST, OPTIONS', 'Access-Control-Allow-Credentials: true');
+    const wss = new WebSocketServer({ 
+        server,
+        handleProtocols, // Use function from outer scope
+        verifyClient // Use function from outer scope
     });
 
-    wss.on('connection', async (ws: WebSocket, _request: unknown) => {
+    wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+        const sessionId = generateSessionId();
+        log(`Client connected, assigned session ID: ${sessionId}`);
+
         if (sessions.size >= maxSessions) {
             log('Max session limit reached. Rejecting new connection.');
             ws.send('Server busy. Please try again later.\r\n');
             ws.close(1013, 'Server busy');
             return;
         }
-
-        const sessionId = generateSessionId();
-        log(`Client connected. Assigning session ID: ${sessionId}. Waiting for authentication...`);
 
         // Create a minimal initial session state for tracking
         const initialSession: Partial<ClientSession> = {
@@ -620,7 +614,7 @@ async function startServer() {
         sessions.set(sessionId, initialSession as ClientSession);
 
         // Handle the single authentication message
-        ws.once('message', async (message) => {
+        ws.once('message', async (message: Buffer) => {
             // --- Authentication Phase ---
             try {
                 let authPayload: { apiKey?: string; accessToken?: string; environmentVariables?: Record<string, string> };
@@ -870,7 +864,7 @@ async function cleanupSession(sessionId: string) {
                     });
                      log(`Container ${session.container.id} stopped or stop attempted.`);
                 }
-            } catch (inspectError: any) {
+            } catch (inspectError: unknown) {
                 logError(`Error inspecting container ${session.container?.id} before stop: ${inspectError instanceof Error ? inspectError.message : String(inspectError)}. May already be stopped or removed.`);
             }
         }
@@ -899,20 +893,32 @@ function handleExecResize(session: ClientSession, data: { cols: number, rows: nu
 function handleMessage(session: ClientSession, message: Buffer) {
     try {
         const msgStr = message.toString('utf8');
-        const parsed = JSON.parse(msgStr);
+        const parsed: unknown = JSON.parse(msgStr);
 
-        if (parsed.type === 'resize' && parsed.data) {
-            handleExecResize(session, parsed.data);
-        } else if (parsed.type === 'data' && parsed.data) {
-            // Write data to the container's stdin stream
-            if (session.stdinStream && !session.stdinStream.destroyed) {
-                 log(`Received data for session ${session.sessionId}, writing to stdinStream.`);
-                session.stdinStream.write(parsed.data);
+        // Check if parsed is an object and has the expected properties
+        if (typeof parsed === 'object' && parsed !== null) {
+            if ('type' in parsed && parsed.type === 'resize' && 'data' in parsed && parsed.data && typeof parsed.data === 'object') {
+                 // Further check for cols and rows if needed, assuming they are numbers for handleExecResize
+                 const resizeData = parsed.data as { cols?: unknown, rows?: unknown };
+                 if (typeof resizeData.cols === 'number' && typeof resizeData.rows === 'number') {
+                    handleExecResize(session, { cols: resizeData.cols, rows: resizeData.rows });
+                 } else {
+                    logError(`Received resize message with invalid data format for session ${session.sessionId}`);
+                 }
+            } else if ('type' in parsed && parsed.type === 'data' && 'data' in parsed) {
+                // Write data to the container's stdin stream
+                if (session.stdinStream && !session.stdinStream.destroyed) {
+                    log(`Received data for session ${session.sessionId}, writing to stdinStream.`);
+                    // Assuming parsed.data is string | Buffer based on context
+                    session.stdinStream.write(parsed.data as string | Buffer);
+                } else {
+                    logError(`Cannot write data: stdinStream not available or destroyed for session ${session.sessionId}`);
+                }
             } else {
-                logError(`Cannot write data: stdinStream not available or destroyed for session ${session.sessionId}`);
+                logError(`Received unknown message type or format for session ${session.sessionId}: ${msgStr}`);
             }
         } else {
-            logError(`Received unknown message type or format for session ${session.sessionId}: ${msgStr}`);
+             logError(`Received non-object message after JSON parse for session ${session.sessionId}: ${msgStr}`);
         }
     } catch {
         // Handle non-JSON messages or binary data directly as input
