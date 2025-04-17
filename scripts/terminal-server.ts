@@ -12,8 +12,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- Configuration ---
-const DOCKER_IMAGE_NAME = 'ably-cli-sandbox';
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const DOCKER_IMAGE_NAME = 'ably-terminal:latest';
+const SESSION_TIMEOUT_MS = 1000 * 60 * 15; // 15 minutes
 const DEFAULT_PORT = 8080;
 const DEFAULT_MAX_SESSIONS = 50;
 const AUTH_TIMEOUT_MS = 10_000; // 10 seconds
@@ -67,10 +67,10 @@ async function cleanupStaleContainers(): Promise<void> {
                 log(`Removing stale container ${containerInfo.Id}...`);
                 await container.remove({ force: true }); // Force remove
                 log(`Removed stale container ${containerInfo.Id}.`);
-            } catch (removeError: any) {
+            } catch (removeError: unknown) {
                 // Ignore "no such container" errors, it might have been removed already
                 if (!(removeError instanceof Error && /no such container/i.test(removeError.message))) {
-                     logError(`Failed to remove stale container ${containerInfo.Id}: ${removeError.message || removeError}`);
+                     logError(`Failed to remove stale container ${containerInfo.Id}: ${removeError instanceof Error ? removeError.message : String(removeError)}`);
                 }
             }
         });
@@ -78,8 +78,8 @@ async function cleanupStaleContainers(): Promise<void> {
         await Promise.allSettled(removalPromises);
         log('Stale container cleanup finished.');
 
-    } catch (error: any) {
-        logError(`Error during stale container cleanup: ${error.message || error}`);
+    } catch (error: unknown) {
+        logError(`Error during stale container cleanup: ${error instanceof Error ? error.message : String(error)}`);
         // Continue starting the server even if cleanup fails
     }
 }
@@ -279,7 +279,7 @@ async function _handleAuth(ws: WebSocket, req: http.IncomingMessage): Promise<bo
     let credentials: { accessToken?: string; apiKey?: string; environmentVariables?: Record<string, string>; type?: string } = {};
     try {
         // Treat req as unknown; extract headers if available
-        const headers = (req as any).headers || {};
+        const headers = (req as { headers?: Record<string, string> }).headers || {};
         credentials = JSON.parse(headers.authorization || '');
     } catch {
         logError('Failed to parse auth message');
@@ -442,7 +442,7 @@ async function _handleAuth(ws: WebSocket, req: http.IncomingMessage): Promise<bo
             }
 
             try {
-                let parsedMessage: any;
+                let parsedMessage: { type?: string; cols?: number; rows?: number };
                 let isResizeMessage = false;
 
                 // Check if it's a resize message
@@ -456,11 +456,14 @@ async function _handleAuth(ws: WebSocket, req: http.IncomingMessage): Promise<bo
                         }
                     } catch {
                         // Not a JSON message, treat as regular data
+                        parsedMessage = {}; // Initialize with empty object if parsing fails
                     }
+                } else {
+                    parsedMessage = {}; // Initialize with empty object if not a buffer or string
                 }
 
                 if (isResizeMessage) {
-                    const { cols, rows } = parsedMessage;
+                    const { cols = 0, rows = 0 } = parsedMessage;
                     // Ensure cols and rows are positive integers
                     if (cols > 0 && rows > 0) {
                         log(`[${currentSessionId}] Received resize request: ${cols}x${rows}`);
