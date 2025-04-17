@@ -1,16 +1,10 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createWebSocketStream } from 'ws';
-import http from 'node:http';
-import { Stream } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import fs from 'node:fs';
-import { spawn } from 'node:child_process';
-import { ConfigManager } from '../src/services/config-manager.js';
 import Docker from 'dockerode';
 import stream, { Duplex } from 'node:stream';
 import crypto from 'node:crypto';
-import { Server } from 'ws';
 
 // Replicate __dirname behavior in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +17,6 @@ const DEFAULT_PORT = 8080;
 const DEFAULT_MAX_SESSIONS = 5;
 const AUTH_TIMEOUT_MS = 10_000; // 10 seconds
 const SHUTDOWN_GRACE_PERIOD_MS = 10_000; // 10 seconds
-const WS_PING_INTERVAL = 30000;
 
 // Type definition for auth timeout reference
 let _AuthTimeoutRef: NodeJS.Timeout | null = null;
