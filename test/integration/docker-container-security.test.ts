@@ -124,10 +124,14 @@ describe('Docker Container Security Features', function() {
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
 
-    // Check that capabilities are dropped
-    const capDrop = containerInfo[0].HostConfig.CapDrop || [];
+    // Normalize entries by stripping 'CAP_' prefix if present so we can work across
+    // different systems
+    const capDrop = (containerInfo[0].HostConfig.CapDrop || []).map(
+      (cap: string) => cap.replace(/^CAP_/, '')
+    );
     expect(capDrop).to.include.members(['NET_ADMIN', 'NET_BIND_SERVICE', 'NET_RAW']);
   });
+
 
   it('should verify seccomp profile is applied', async function() {
     // Get container info in JSON format
