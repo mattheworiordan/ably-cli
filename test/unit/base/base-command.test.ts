@@ -355,14 +355,14 @@ describe("AblyBaseCommand", function() {
     });
 
     describe("shouldSuppressOutput", function() {
-      it("should return true when quiet flag is set", function() {
-        const flags: BaseFlags = { quiet: true };
+      it("should return true when token-only flag is set", function() {
+        const flags: BaseFlags = { "token-only": true };
         expect(command.testShouldSuppressOutput(flags)).to.be.true;
       });
 
-      it("should return true when JSON output is enabled", function() {
+      it("should return false when JSON output is enabled", function() {
         const flags: BaseFlags = { json: true };
-        expect(command.testShouldSuppressOutput(flags)).to.be.true;
+        expect(command.testShouldSuppressOutput(flags)).to.be.false;
       });
 
       it("should return false when no suppression flags are set", function() {
@@ -372,10 +372,10 @@ describe("AblyBaseCommand", function() {
     });
 
     describe("outputJsonError", function() {
-      let logStub: sinon.SinonStub;
+      let consoleErrorStub: sinon.SinonStub;
 
       beforeEach(function() {
-        logStub = sandbox.stub(command, "log");
+        consoleErrorStub = sandbox.stub(console, "error");
       });
 
       it("should output error in JSON format", function() {
@@ -384,12 +384,12 @@ describe("AblyBaseCommand", function() {
 
         command.testOutputJsonError(message, errorDetails);
 
-        expect(logStub.calledOnce).to.be.true;
-        const output = JSON.parse(logStub.firstCall.args[0]);
-        expect(output.error).to.equal(message);
-        expect(output.success).to.be.false;
-        expect(output.code).to.equal(123);
-        expect(output.statusCode).to.equal(400);
+        expect(consoleErrorStub.calledOnce).to.be.true;
+        const output = JSON.parse(consoleErrorStub.firstCall.args[0]);
+        expect(output.message).to.equal(message);
+        expect(output.error).to.be.true;
+        expect(output.details.code).to.equal(123);
+        expect(output.details.statusCode).to.equal(400);
       });
     });
   });

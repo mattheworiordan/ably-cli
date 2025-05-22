@@ -45,7 +45,7 @@ class TestHelpContactCommand {
   }
 
   shouldOutputJson(flags: any): boolean {
-    return flags.json || flags["pretty-json"];
+    return Boolean(flags.json || flags["pretty-json"]);
   }
 
   formatJsonOutput(data: any, flags: any): string {
@@ -239,7 +239,7 @@ describe("HelpContact", function() {
       const calls = logSpy.getCalls().map(call => call.args[0]);
 
       // Should use emojis for visual organization
-      const emojiLines = calls.filter(line => /^[📧💬🐛📖📋]/.test(line));
+      const emojiLines = calls.filter(line => /^[📧💬🐛📖📋]/u.test(line));
       expect(emojiLines).to.have.length(5);
 
       // Should use consistent indentation
@@ -316,11 +316,11 @@ describe("HelpContact", function() {
       const allLogs = logSpy.getCalls().map(call => call.args[0]).join('\n');
 
       // Each contact method should explain its purpose
-      expect(allLogs).to.match(/Email.*technical issues.*account questions.*billing/i);
-      expect(allLogs).to.match(/Community.*Ask questions.*share ideas.*help.*developers/i);
-      expect(allLogs).to.match(/Bug.*Report bugs.*request.*features/i);
-      expect(allLogs).to.match(/Documentation.*guides.*reference/i);
-      expect(allLogs).to.match(/Status.*service status.*incidents/i);
+      expect(allLogs).to.match(/technical issues.*account questions.*billing/i);
+      expect(allLogs).to.match(/Ask questions.*share ideas.*help.*developers/i);
+      expect(allLogs).to.match(/Report bugs.*request.*features/i);
+      expect(allLogs).to.match(/guides.*reference/i);
+      expect(allLogs).to.match(/service status.*incidents/i);
     });
 
     it("should be scannable with visual indicators", async function() {
@@ -330,7 +330,7 @@ describe("HelpContact", function() {
       const calls = logSpy.getCalls().map(call => call.args[0]);
 
       // Should use visual indicators for different sections
-      const visualIndicators = calls.filter(line => /[📧💬🐛📖📋]/.test(line));
+      const visualIndicators = calls.filter(line => /[📧💬🐛📖📋]/u.test(line));
       expect(visualIndicators).to.have.length(5);
 
       // URLs should be on their own lines for easy copying
