@@ -6,38 +6,41 @@ import * as Ably from "ably";
 
 // Create a testable version of ChannelsPresenceEnter
 class TestableChannelsPresenceEnter extends ChannelsPresenceEnter {
+  public logOutput: string[] = [];
   public errorOutput: string = '';
   private _parseResult: any;
-  public mockClient: any = {}; // Initialize mockClient
   private _shouldOutputJson = false;
   private _formatJsonOutputFn: ((data: Record<string, unknown>) => string) | null = null;
 
   // Override parse to simulate parse output
-  public override async parse(..._args: any[]) {
-    if (!this._parseResult) {
-        // Default parse result if not set
-        this._parseResult = {
-            flags: { data: '{}', 'show-others': true },
-            args: { channel: 'default-presence-channel' },
-            argv: ['default-presence-channel'],
-            raw: [],
-        };
-    }
+  public override async parse() {
     return this._parseResult;
   }
 
   public setParseResult(result: any) {
     this._parseResult = result;
-    // Ensure argv reflects args.channel for run() method logic
-    if (result.args?.channel) {
-        this._parseResult.argv = [result.args.channel];
+  }
+
+  // Mock client object
+  public mockClient: any = null;
+  public mockChannel: any = null;
+  public mockPresence: any = null;
+
+  // Override client creation method
+  public override async createAblyClient(_flags: any): Promise<Ably.Realtime | null> {
+    this.debug('Using mock Realtime client');
+    return this.mockClient as unknown as Ably.Realtime;
+  }
+
+  // Override logging methods
+  public override log(message?: string | undefined, ...args: any[]): void {
+    if (message) {
+      this.logOutput.push(message);
     }
   }
 
-  // Correct override signature for the error method
   public override error(message: string | Error, _options?: { code?: string; exit?: number | false }): never {
     this.errorOutput = typeof message === 'string' ? message : message.message;
-    // Prevent actual exit during tests by throwing instead
     throw new Error(this.errorOutput);
   }
 
@@ -58,23 +61,10 @@ class TestableChannelsPresenceEnter extends ChannelsPresenceEnter {
     this._formatJsonOutputFn = fn;
   }
 
-  // Helper for blocking promises - MODIFIED to resolve immediately for unit tests
-  public override setupCleanupHandler(_cleanupFn: () => Promise<void>): Promise<void> {
-    this.debug("Skipping indefinite wait in setupCleanupHandler for test.");
-    return Promise.resolve();
-  }
-
   // Override ensureAppAndKey to prevent real auth checks in unit tests
   protected override async ensureAppAndKey(_flags: any): Promise<{ apiKey: string; appId: string } | null> {
     this.debug('Skipping ensureAppAndKey in test mode');
     return { apiKey: 'dummy-key-value:secret', appId: 'dummy-app' };
-  }
-
-  // Override the createAblyClient method to ensure it returns a value
-  public override async createAblyClient(_flags?: any): Promise<Ably.Realtime | null> {
-    this.debug('Overriding createAblyClient in test mode, returning mockClient.');
-    // Return the mock client that was set up for testing
-    return this.mockClient as unknown as Ably.Realtime;
   }
 }
 
@@ -82,70 +72,57 @@ describe("ChannelsPresenceEnter", function() {
   let sandbox: sinon.SinonSandbox;
   let command: TestableChannelsPresenceEnter;
   let mockConfig: Config;
-  let logStub: sinon.SinonStub;
+  let mockPresenceEnter: sinon.SinonStub;
 
   beforeEach(function() {
     sandbox = sinon.createSandbox();
-    mockConfig = { runHook: sandbox.stub() } as unknown as Config;
+    mockConfig = { runHook: sinon.stub() } as unknown as Config;
     command = new TestableChannelsPresenceEnter([], mockConfig);
-    logStub = sandbox.stub(command, 'log');
 
-    // Set up a more complete mock client structure for beforeEach
-    const mockPresenceInstance = {
-        get: sandbox.stub().resolves([]), // Default to empty members
-        subscribe: sandbox.stub(),
-        unsubscribe: sandbox.stub(),
-        enter: sandbox.stub().resolves(),
-        leave: sandbox.stub().resolves(),
-    };
-    const mockChannelInstance = {
-      name: 'test-presence-channel', // Add default name
-      presence: mockPresenceInstance,
-      subscribe: sandbox.stub(),
-      unsubscribe: sandbox.stub(),
-      // Make attach resolve quickly
-      attach: sandbox.stub().resolves(),
-      detach: sandbox.stub().resolves(),
-      // Simulate channel attached event shortly after attach is called
-      on: sandbox.stub().callsFake((event: string, handler: (stateChange: any) => void) => {
-          if (event === 'attached' && typeof handler === 'function') {
-            // Simulate async event
-            setTimeout(() => handler({ current: 'attached' }), 0);
-          }
-      }),
+    // Create stubs for the presence enter method
+    mockPresenceEnter = sinon.stub().resolves();
+
+    // Set up the mock presence object
+    command.mockPresence = {
+      enter: mockPresenceEnter,
+      leave: sinon.stub().resolves(),
+      get: sinon.stub().resolves([])
     };
 
+    // Set up the mock channel
+    command.mockChannel = {
+      presence: command.mockPresence,
+      attach: sinon.stub().resolves(),
+      detach: sinon.stub().resolves(),
+      on: sinon.stub(),
+      once: sinon.stub()
+    };
+
+    // Set up the mock client
     command.mockClient = {
       channels: {
-        get: sandbox.stub().returns(mockChannelInstance),
-        release: sandbox.stub(),
+        get: sinon.stub().returns(command.mockChannel)
       },
       connection: {
-        once: sandbox.stub(),
-        // Simulate connection connected event quickly
-        on: sandbox.stub().callsFake((event: string, handler: (stateChange: any) => void) => {
-            if (event === 'connected' && typeof handler === 'function') {
-                // Simulate async event
-                setTimeout(() => handler({ current: 'connected' }), 0);
-            }
-        }),
-        close: sandbox.stub(),
-        state: 'connected', // Start in connected state for simplicity
+        on: sinon.stub(),
+        once: sinon.stub().callsArg(1), // Simulate immediate connection
+        state: 'connected'
       },
-      auth: {
-        clientId: 'test-client-id',
-      },
-      close: sandbox.stub(),
+      close: sinon.stub()
     };
 
-    // Ensure the overridden createAblyClient uses this mock
-    // (Already handled by the class override, no need to stub it again here)
-
-    // Set default parse result (can be overridden by specific tests)
+    // Set default parse result
     command.setParseResult({
-      flags: { data: '{}', 'show-others': true },
-      args: { channel: 'test-presence-channel' },
-      raw: [],
+      flags: { 
+        'client-id': 'test-client-123',
+        wait: false
+      },
+      args: { 
+        channel: 'test-presence-channel', 
+        data: '{"name":"Test User","status":"online"}' 
+      },
+      argv: [],
+      raw: []
     });
   });
 
@@ -153,239 +130,208 @@ describe("ChannelsPresenceEnter", function() {
     sandbox.restore();
   });
 
-  it("should attempt to create an Ably client", async function() {
-    // Create mock client and presence/channel structure
-    const mockPresenceInstance = {
-      get: sinon.stub().resolves([]),
-      subscribe: sinon.stub(),
-      unsubscribe: sinon.stub(),
-      enter: sinon.stub().resolves(),
-      leave: sinon.stub().resolves(),
-    };
-
-    const mockChannelInstance = {
-      presence: mockPresenceInstance,
-      subscribe: sinon.stub(),
-      unsubscribe: sinon.stub(),
-      attach: sinon.stub().resolves(),
-      detach: sinon.stub().resolves(),
-      on: sinon.stub(),
-    };
-
-    command.mockClient = {
-      channels: {
-        get: sinon.stub().returns(mockChannelInstance),
-        release: sinon.stub(),
-      },
-      connection: {
-        once: sinon.stub(),
-        on: sinon.stub(),
-        close: sinon.stub(),
-        state: 'connected',
-      },
-      auth: {
-        clientId: 'test-client-id',
-      },
-      close: sinon.stub(),
-    };
-
-    // Stub createAblyClient to return our mock
-    const createClientStub = sinon.stub(command, 'createAblyClient' as keyof TestableChannelsPresenceEnter)
-      .resolves(command.mockClient as unknown as Ably.Realtime);
-
-    // Setup connection handler
-    command.mockClient.connection.on.callsFake((handler: (stateChange: any) => void) => {
-      if (typeof handler === 'function') {
-        setTimeout(() => handler({ current: 'connected' }), 10);
-      }
-    });
-
-    // Create a promise and controller for test timing
-    const controller = new AbortController();
-
-    // Start the command run
-    const _runPromise = command.run().catch(error => {
-      if (!controller.signal.aborted) {
-        throw error;
-      }
-      return null;
-    });
-
-    // Wait for the test to process
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    // Verify createAblyClient was called
-    expect(createClientStub.calledOnce).to.be.true;
-
-    // Abort the command run to end the test
-    controller.abort();
-  });
-
-  it("should enter presence with specified data", async function() {
-    // Set up specific presence data
-    command.setParseResult({
-      flags: { data: '{"status":"online"}', 'show-others': false },
-      args: { channel: 'test-presence-channel' },
-      raw: [],
-    });
-
-    // Ensure necessary mocks are set up (using sandbox mocks from beforeEach)
-    const enterStub = command.mockClient.channels.get().presence.enter;
-    enterStub.resolves(); // Ensure enter resolves successfully
-    command.mockClient.channels.get().attach.resolves();
-    command.mockClient.connection.on.callsFake((event: string, handler: (stateChange: any) => void) => {
-      if (event === 'connected' && typeof handler === 'function') {
-        // Simulate async connection event
-        setTimeout(() => handler({ current: 'connected' }), 0);
-      }
-    });
-
-    // Run the command and wait for it to complete (setupCleanupHandler now resolves immediately)
+  it("should enter presence successfully", async function() {
     await command.run();
 
-    // Verify presence.enter was called with correct data
-    expect(enterStub.calledOnce).to.be.true;
-    expect(enterStub.firstCall.args[0]).to.deep.equal({ status: 'online' });
+    // Check that channels.get was called with the right channel name
+    expect(command.mockClient.channels.get.calledOnce).to.be.true;
+    expect(command.mockClient.channels.get.firstCall.args[0]).to.equal('test-presence-channel');
 
-    // Check logStub was called with confirmation
-    expect(logStub.calledWith(sinon.match('Entered presence'))).to.be.true;
-    expect(logStub.calledWith(sinon.match('test-presence-channel'))).to.be.true;
+    // Check that presence.enter was called with correct data and client ID
+    expect(mockPresenceEnter.calledOnce).to.be.true;
+    const enterArgs = mockPresenceEnter.firstCall.args;
+    expect(enterArgs[0]).to.deep.equal({ name: "Test User", status: "online" });
+    expect(enterArgs[1]).to.equal('test-client-123');
+
+    // Check for expected output in logs
+    const output = command.logOutput.join('\n');
+    expect(output).to.include('Entered presence on channel "test-presence-channel"');
+    expect(output).to.include('Client ID: test-client-123');
   });
 
-  it("should show other presence members when requested", async function() {
-    // Setup to show other presence members
+  it("should handle string data input", async function() {
     command.setParseResult({
-      flags: { data: '{}', 'show-others': true },
-      args: { channel: 'test-presence-channel' },
-      raw: [],
+      flags: { 
+        'client-id': 'test-client-123',
+        wait: false
+      },
+      args: { 
+        channel: 'test-presence-channel', 
+        data: 'simple string data' 
+      },
+      argv: [],
+      raw: []
     });
 
-    // Mock presence members data
-    const mockMembers = [
-      { clientId: 'other-user', connectionId: 'conn1', data: { status: 'online' } },
-      { clientId: 'test-client-id', connectionId: 'conn2', data: { status: 'away' } } // Same as our client ID
-    ];
-
-    // Ensure necessary mocks are set up (using sandbox mocks from beforeEach)
-    const getStub = command.mockClient.channels.get().presence.get;
-    const subscribeStub = command.mockClient.channels.get().presence.subscribe;
-    const enterStub = command.mockClient.channels.get().presence.enter;
-    const attachStub = command.mockClient.channels.get().attach;
-
-    getStub.resolves(mockMembers); // Mock presence.get response
-    enterStub.resolves();
-    attachStub.resolves();
-    command.mockClient.connection.on.callsFake((event: string, handler: (stateChange: any) => void) => {
-      if (event === 'connected' && typeof handler === 'function') {
-        setTimeout(() => handler({ current: 'connected' }), 0);
-      }
-    });
-
-    // Run the command and wait for it to complete
     await command.run();
 
-    // Verify presence.get was called
-    expect(getStub.calledOnce).to.be.true;
-
-    // Verify presence.subscribe was called for presence events
-    expect(subscribeStub.called).to.be.true;
-
-    // Check logStub was called with other members but not own client ID
-    expect(logStub.calledWith(sinon.match('other-user'))).to.be.true;
-    expect(logStub.calledWith(sinon.match('Listening for presence events'))).to.be.true;
-    // Check it wasn't called with own ID in the member list log lines
-    let calledWithOwnId = false;
-    for (const call of logStub.getCalls()) {
-      // Only check log lines starting with the member list prefix '- '
-      if (typeof call.args[0] === 'string' && call.args[0].startsWith('- ') && call.args.some(arg => typeof arg === 'string' && arg.includes('test-client-id'))) {
-            calledWithOwnId = true;
-            break;
-          }
-    }
-    expect(calledWithOwnId, "Member list log should not contain own client ID").to.be.false;
+    expect(mockPresenceEnter.calledOnce).to.be.true;
+    const enterArgs = mockPresenceEnter.firstCall.args;
+    expect(enterArgs[0]).to.equal('simple string data');
+    expect(enterArgs[1]).to.equal('test-client-123');
   });
 
-  it("should handle invalid JSON data format", async function() {
-    // Set invalid JSON data
+  it("should handle null/empty data", async function() {
     command.setParseResult({
-      flags: { data: '{invalid-json}', 'show-others': false },
-      args: { channel: 'test-presence-channel' },
-      raw: [],
+      flags: { 
+        'client-id': 'test-client-123',
+        wait: false
+      },
+      args: { 
+        channel: 'test-presence-channel', 
+        data: '' 
+      },
+      argv: [],
+      raw: []
     });
 
-    // Use the sandbox to stub the error method
-    const errorStub = sandbox.stub(command, 'error' as keyof TestableChannelsPresenceEnter);
-    // Simulate the behavior where the command *would* throw this error internally
-    // We expect the test setup (invalid JSON flag) to cause command.run() to trigger this.
-    errorStub.throws(new Error('Invalid JSON data format'));
+    await command.run();
+
+    expect(mockPresenceEnter.calledOnce).to.be.true;
+    const enterArgs = mockPresenceEnter.firstCall.args;
+    expect(enterArgs[0]).to.be.null;
+    expect(enterArgs[1]).to.equal('test-client-123');
+  });
+
+  it("should wait for presence enter when --wait flag is used", async function() {
+    command.setParseResult({
+      flags: { 
+        'client-id': 'test-client-123',
+        wait: true
+      },
+      args: { 
+        channel: 'test-presence-channel', 
+        data: '{"name":"Test User"}' 
+      },
+      argv: [],
+      raw: []
+    });
+
+    // Set up presence event simulation
+    let presenceCallback: any = null;
+    command.mockPresence.subscribe = sinon.stub().callsFake((eventOrCallback: any, callback?: any) => {
+      if (typeof eventOrCallback === 'function') {
+        presenceCallback = eventOrCallback;
+      } else if (callback) {
+        presenceCallback = callback;
+      }
+      // Simulate presence enter event after a short delay
+      setTimeout(() => {
+        if (presenceCallback) {
+          presenceCallback({
+            action: 'enter',
+            clientId: 'test-client-123',
+            data: { name: 'Test User' }
+          });
+        }
+      }, 10);
+    });
+
+    command.mockPresence.unsubscribe = sinon.stub();
+
+    await command.run();
+
+    expect(mockPresenceEnter.calledOnce).to.be.true;
+    expect(command.mockPresence.subscribe.called).to.be.true;
+    expect(command.mockPresence.unsubscribe.called).to.be.true;
+
+    const output = command.logOutput.join('\n');
+    expect(output).to.include('Waiting for presence confirmation');
+    expect(output).to.include('Presence confirmed');
+  });
+
+  it("should handle presence enter failures", async function() {
+    const presenceError = new Error("Presence enter failed");
+    mockPresenceEnter.rejects(presenceError);
 
     try {
-      // The actual command logic should detect the invalid JSON and call this.error, which is stubbed to throw.
       await command.run();
-      // If command.run() completes without throwing (because this.error wasn't called or didn't throw as expected), fail the test.
-      expect.fail("Command should have thrown an error for invalid JSON");
+      expect.fail('Command should have thrown an error');
     } catch (error: any) {
-      // Assert that the error caught is the one thrown by our stub
-      expect(error.message).to.include('Invalid JSON data format');
+      expect(mockPresenceEnter.called).to.be.true;
+      expect(error.message).to.include('Presence enter failed');
     }
-    // No need for finally block with errorStub.restore() as sandbox handles it
   });
 
-  it("should output JSON format when requested", async function() {
-    const testChannelName = 'test-presence-channel-json';
-    // Configure for JSON output
-    command.setParseResult({
-      flags: { data: '{"status":"online"}', 'show-others': false, json: true }, // Add json flag
-      args: { channel: testChannelName },
-      raw: [],
-    });
-    command.setShouldOutputJson(true);
-    command.setFormatJsonOutput((data) => JSON.stringify(data)); // Use standard JSON stringify for test
-
-    // Ensure necessary mocks resolve, AND that the channel mock has the correct name
-    const channelGetStub = command.mockClient.channels.get;
-    const mockChannel = channelGetStub(); // Get the default mock channel from beforeEach
-    mockChannel.name = testChannelName; // Set the correct name specifically for this test
-    channelGetStub.withArgs(testChannelName).returns(mockChannel); // Ensure get() called with this name returns our modified mock
-
-    const enterStub = mockChannel.presence.enter;
-    const attachStub = mockChannel.attach;
-    enterStub.resolves();
-    attachStub.resolves();
-
-    // Simulate connection event
-    command.mockClient.connection.on.callsFake((event: string, handler: (stateChange: any) => void) => {
-      if (event === 'connected' && typeof handler === 'function') {
-        setTimeout(() => handler({ current: 'connected' }), 0);
+  it("should handle connection state changes", async function() {
+    // Set up connection state change handlers
+    let connectionCallback: any = null;
+    command.mockClient.connection.on = sinon.stub().callsFake((event: string, callback: any) => {
+      if (event === 'connected' || typeof event === 'function') {
+        connectionCallback = typeof event === 'function' ? event : callback;
       }
     });
 
-    // Run the command and wait for it to complete
     await command.run();
 
-    // Verify log was called once with JSON output
-    expect(logStub.calledOnce).to.be.true;
-    let actualJsonOutput;
-    try {
-      actualJsonOutput = JSON.parse(logStub.firstCall.args[0]);
-    } catch {
-      expect.fail(`Output was not valid JSON: ${logStub.firstCall.args[0]}`);
-    }
+    expect(command.mockClient.connection.on.called).to.be.true;
+    expect(mockPresenceEnter.calledOnce).to.be.true;
+  });
 
-    // Define expected JSON structure (timestamp will vary)
-    const expectedJsonStructure = {
+  it("should output JSON when requested", async function() {
+    command.setShouldOutputJson(true);
+    command.setFormatJsonOutput(data => JSON.stringify({
+      ...data,
       success: true,
-      message: `Entered presence on channel ${testChannelName} as test-client-id`,
-      channel: testChannelName,
-      clientId: "test-client-id",
-      data: { status: "online" },
-    };
+      timestamp: new Date().toISOString()
+    }));
 
-    // Verify JSON content (omitting timestamp)
-    expect(actualJsonOutput).to.deep.include(expectedJsonStructure);
-    expect(actualJsonOutput).to.have.property('timestamp').that.is.a('string');
+    await command.run();
 
-    // Verify presence.enter was called
-    expect(enterStub.called).to.be.true;
+    expect(mockPresenceEnter.calledOnce).to.be.true;
+
+    // Check for JSON output in the logs
+    const jsonOutput = command.logOutput.find(log => log.includes('success'));
+    expect(jsonOutput).to.exist;
+
+    if (jsonOutput) {
+      const parsed = JSON.parse(jsonOutput);
+      expect(parsed).to.have.property('success', true);
+      expect(parsed).to.have.property('channel', 'test-presence-channel');
+      expect(parsed).to.have.property('clientId', 'test-client-123');
+    }
+  });
+
+  it("should handle invalid JSON data", async function() {
+    command.setParseResult({
+      flags: { 
+        'client-id': 'test-client-123',
+        wait: false
+      },
+      args: { 
+        channel: 'test-presence-channel', 
+        data: '{"invalid": json}' 
+      },
+      argv: [],
+      raw: []
+    });
+
+    try {
+      await command.run();
+      expect.fail('Command should have thrown an error');
+    } catch (error: any) {
+      expect(error.message).to.include('Invalid JSON');
+    }
+  });
+
+  it("should properly clean up resources", async function() {
+    await command.run();
+
+    expect(command.mockClient.close.calledOnce).to.be.true;
+  });
+
+  it("should handle channel attachment", async function() {
+    // Set up channel state change handler
+    let channelCallback: any = null;
+    command.mockChannel.on = sinon.stub().callsFake((event: string, callback: any) => {
+      if (event === 'attached' || typeof event === 'function') {
+        channelCallback = typeof event === 'function' ? event : callback;
+      }
+    });
+
+    await command.run();
+
+    expect(command.mockChannel.attach.called).to.be.true;
+    expect(mockPresenceEnter.calledOnce).to.be.true;
   });
 });
