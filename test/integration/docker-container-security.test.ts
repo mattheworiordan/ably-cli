@@ -16,26 +16,47 @@ describe('Docker Container Security Features', function() {
 
   // Container name for testing
   const containerName = 'ably-cli-security-test';
+  
+  // Flag to track if Docker is available
+  let dockerAvailable = false;
 
-  // Clean up any lingering test containers
+  // Check if Docker is available before running any tests
   before(async function() {
     try {
-      await execAsync(`docker rm -f ${containerName} 2>/dev/null || true`);
+      await execAsync('docker --version');
+      dockerAvailable = true;
+      console.log('Docker is available - running container security tests');
+      
+      // Clean up any lingering test containers if Docker is available
+      try {
+        await execAsync(`docker rm -f ${containerName} 2>/dev/null || true`);
+      } catch {
+        // Ignore errors if the container doesn't exist
+      }
     } catch {
-      // Ignore errors if the container doesn't exist
+      dockerAvailable = false;
+      console.log('Docker is not available - skipping all Docker container security tests');
+      this.skip(); // Skip the entire suite
     }
   });
 
-  // Clean up after tests
+  // Clean up after tests (only if Docker is available)
   after(async function() {
-    try {
-      await execAsync(`docker rm -f ${containerName} 2>/dev/null || true`);
-    } catch {
-      // Ignore errors if the container doesn't exist
+    if (dockerAvailable) {
+      try {
+        await execAsync(`docker rm -f ${containerName} 2>/dev/null || true`);
+      } catch {
+        // Ignore errors if the container doesn't exist
+      }
     }
   });
 
   it('should verify that the container image exists', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     const { stdout } = await execAsync('docker images ably-cli-sandbox --format "{{.Repository}}"');
 
     // If the image doesn't exist, build it
@@ -48,6 +69,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should create a container with security settings', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Create a test container with explicitly set security parameters
     const seccompProfilePath = path.resolve(__dirname, '../../docker/seccomp-profile.json');
 
@@ -67,6 +93,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify read-only filesystem configuration', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Get container info in JSON format
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
@@ -76,6 +107,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify process limits are set', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Get container info in JSON format
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
@@ -86,6 +122,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify memory limits are set', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Get container info in JSON format
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
@@ -97,6 +138,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify tmpfs mounts with noexec flag', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Get container info in JSON format
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
@@ -120,6 +166,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify security capabilities are dropped', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Get container info in JSON format
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
@@ -139,6 +190,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify seccomp profile is applied', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Get container info in JSON format
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
@@ -151,6 +207,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify containers run as non-root user', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Get container info in JSON format
     const { stdout } = await execAsync(`docker inspect ${containerName}`);
     const containerInfo = JSON.parse(stdout);
@@ -160,6 +221,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify restricted network configuration exists or not be required', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     try {
       // Check if the restricted network exists
       const { stdout } = await execAsync('docker network ls --format "{{.Name}}" | grep ably_cli_restricted');
@@ -179,6 +245,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify the container can run commands', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Start the container
     await execAsync(`docker start ${containerName}`);
 
@@ -198,6 +269,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify the ably CLI command works', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     try {
       // Test that the ably command works
       const { stdout: ablyVersionResult } = await execAsync(`docker exec ${containerName} ably --version`);
@@ -211,6 +287,11 @@ describe('Docker Container Security Features', function() {
   });
 
   it('should verify the container cannot modify the filesystem', async function() {
+    if (!dockerAvailable) {
+      this.skip();
+      return;
+    }
+    
     // Try to write to the root filesystem
     try {
       await execAsync(`docker exec ${containerName} touch /test-file`);
