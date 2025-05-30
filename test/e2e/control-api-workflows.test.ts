@@ -1,7 +1,7 @@
 import { expect } from 'chai';
-import { describe, it, before, after, beforeEach } from 'mocha';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { describe, it, before, after } from 'mocha';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { ControlApi } from '../../src/services/control-api.js';
 
 const execAsync = promisify(exec);
@@ -270,7 +270,7 @@ describe('Control API E2E Workflow Tests', () => {
       
       // Remove from cleanup list since we deleted it
       const index = createdResources.queues.indexOf(queueName);
-      if (index > -1) {
+      if (index !== -1) {
         createdResources.queues.splice(index, 1);
       }
     });
@@ -376,7 +376,7 @@ describe('Control API E2E Workflow Tests', () => {
       this.timeout(10000);
 
       try {
-        const result = await execAsync(`${cliPath} apps list --json`, {
+        const _result = await execAsync(`${cliPath} apps list --json`, {
           env: { ...process.env, ABLY_ACCESS_TOKEN: 'invalid-token' }
         });
         
@@ -392,7 +392,7 @@ describe('Control API E2E Workflow Tests', () => {
       this.timeout(10000);
 
       try {
-        const result = await execAsync(`${cliPath} apps update non-existent-app-id --name "Test" --json`, {
+        const _result = await execAsync(`${cliPath} apps update non-existent-app-id --name "Test" --json`, {
           env: { ...process.env, ABLY_ACCESS_TOKEN: process.env.ABLY_ACCESS_TOKEN }
         });
         
@@ -407,7 +407,7 @@ describe('Control API E2E Workflow Tests', () => {
       this.timeout(10000);
 
       try {
-        const result = await execAsync(`${cliPath} apps create`, {
+        const _result = await execAsync(`${cliPath} apps create`, {
           env: { ...process.env, ABLY_ACCESS_TOKEN: process.env.ABLY_ACCESS_TOKEN }
         });
         

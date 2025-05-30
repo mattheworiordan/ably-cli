@@ -30,6 +30,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Type check
+        run: pnpm run build
+
+      - name: Lint check
+        run: pnpm run lint
+
       - name: Run React Web CLI Unit Tests
         run: pnpm --filter @ably/react-web-cli test
 
