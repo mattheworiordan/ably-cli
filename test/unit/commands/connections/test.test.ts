@@ -30,7 +30,7 @@ class TestableConnectionsTest extends ConnectionsTest {
   }
 
   // Mock console.log to capture any direct console output
-  public mockConsoleLog = (message?: any, ...optionalParams: any[]): void => {
+  public mockConsoleLog = (message?: any, ..._optionalParams: any[]): void => {
     if (message !== undefined) {
       this.consoleOutput.push(message.toString());
     }
@@ -350,7 +350,7 @@ describe("ConnectionsTest", function() {
   });
 
   it("should test publish and subscribe during connection test", async function() {
-    const testChannelName = `test-${Date.now()}`;
+    const _testChannelName = `test-${Date.now()}`;
     const publishStub = command.mockClient.channels.get().publish;
     const subscribeStub = command.mockClient.channels.get().subscribe;
 

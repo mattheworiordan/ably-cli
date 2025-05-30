@@ -1,4 +1,4 @@
-import { ChatClient, RoomStatus, Subscription, MessageReactionRawEvent, MessageReactionEvents, MessageReactionSummaryEvent } from "@ably/chat";
+import { ChatClient, RoomStatus, Subscription, MessageReactionRawEvent, MessageReactionSummaryEvent } from "@ably/chat";
 import { Args, Flags } from "@oclif/core";
 import * as Ably from "ably";
 import chalk from "chalk";
@@ -553,30 +553,22 @@ export default class MessagesReactionsSubscribe extends ChatBaseCommand {
 
   private displayReactionSummary(
     summary: Record<string, { total: number; clientIds: string[] }>,
-    flags: any
+    _flags: { json?: boolean; 'pretty-json'?: boolean }
   ): void {
-    for (const [reaction, data] of Object.entries(summary)) {
-      this.log(
-        `    ${chalk.yellow(reaction)}: ${chalk.white(data.total.toString())} from ${chalk.cyan(data.clientIds.join(", "))}`
-      );
+    for (const [reactionName, details] of Object.entries(summary)) {
+      this.log(`    ${chalk.yellow(reactionName)}: ${details.total} (${details.clientIds.join(', ')})`);
     }
   }
 
   private displayMultipleReactionSummary(
     summary: Record<string, { total: number; clientIds: Record<string, number> }>,
-    flags: any
+    _flags: { json?: boolean; 'pretty-json'?: boolean }
   ): void {
-    for (const [reaction, data] of Object.entries(summary)) {
-      this.log(
-        `    ${chalk.yellow(reaction)}: ${chalk.white(data.total.toString())} total`
-      );
-      
-      // Display client details for multiple reactions
-      for (const [clientId, count] of Object.entries(data.clientIds)) {
-        this.log(
-          `      ${chalk.cyan(clientId)}: ${chalk.white(count.toString())}`
-        );
-      }
+    for (const [reactionName, details] of Object.entries(summary)) {
+      const clientList = Object.entries(details.clientIds)
+        .map(([clientId, count]) => `${clientId}(${count})`)
+        .join(', ');
+      this.log(`    ${chalk.yellow(reactionName)}: ${details.total} (${clientList})`);
     }
   }
 }

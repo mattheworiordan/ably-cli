@@ -236,11 +236,11 @@ test.describe.serial('Prompt integrity & exit behaviour', () => {
 
     // Overlay should exist – with better error handling for CI
     const overlay = page.locator('[data-testid="ably-overlay"]');
-    let overlayVisible = false;
+    let _overlayVisible = false;
     try {
       await expect(overlay).toBeVisible({ timeout: 10000 }); // Increased timeout
       await expect(overlay).toContainText('ERROR: SERVER DISCONNECT');
-      overlayVisible = true;
+      _overlayVisible = true;
     } catch (e) {
       console.warn('[Prompt-Integrity] Overlay visibility assertion failed, checking if manual reconnect state is still valid:', e);
       // Double-check that we're still in the correct state even if overlay isn't visible
